@@ -1,6 +1,8 @@
 入口文件：
 cmd/kubectl/kubectl.go
 
+代码分支：`release-1.15`
+
 # root命令初始化
 这里的root命令就是`kubectl`命令本身，底层依赖的是cobra包创建命令。
 
@@ -131,3 +133,119 @@ cmds.AddCommand(apiresources.NewCmdAPIVersions(f, ioStreams))
 cmds.AddCommand(apiresources.NewCmdAPIResources(f, ioStreams))
 cmds.AddCommand(options.NewCmdOptions(ioStreams.Out))
 ```
+
+# 命令执行
+
+接下来调用`command.Execute()`执行命令。
+
+我们以`kubectl create -f kubia_luksa.yaml`为例进行说明。
+
+>kubia_luksa.yaml文件来源于kubernetes in action书中例子。
+
+>在研究过程中用到了delve进行debug：`dlv debug cmd/kubectl/kubectl.go -- create -f ~/kubia_luksa.yaml`。
+
+根据在`命令初始化`过程的讲解，可以知道`create`子命令会在`pkg/kubectl/cmd/create/create.go:114`执行。
+
+```go
+cmd := &cobra.Command{
+		Use:                   "create -f FILENAME",
+		DisableFlagsInUseLine: true,
+		Short:                 i18n.T("Create a resource from a file or from stdin."),
+		Long:                  createLong,
+		Example:               createExample,
+		Run: func(cmd *cobra.Command, args []string) {
+			if cmdutil.IsFilenameSliceEmpty(o.FilenameOptions.Filenames, o.FilenameOptions.Kustomize) {
+				ioStreams.ErrOut.Write([]byte("Error: must specify one of -f and -k\n\n"))
+				defaultRunFunc := cmdutil.DefaultSubCommandRun(ioStreams.ErrOut)
+				defaultRunFunc(cmd, args)
+				return
+			}
+			cmdutil.CheckErr(o.Complete(f, cmd))
+			cmdutil.CheckErr(o.ValidateArgs(cmd, args))
+			//create命令执行入口
+			cmdutil.CheckErr(o.RunCreate(f, cmd))
+		},
+	}
+```
+
+232~240行通过构造器模式构造了一个result对象：
+
+```go
+//创建resource.Builder对象
+r := f.NewBuilder().
+	Unstructured().
+	//设置schema校验器
+	Schema(schema).
+	//设置continueOnError=true，尽可能多的加载对象
+	ContinueOnError().
+	//设置名字空间
+	NamespaceParam(cmdNamespace).DefaultNamespace().
+	//设置文件参数（文件路径/地址）
+	FilenameParam(enforceNamespace, &o.FilenameOptions).
+	//设置标签选择器
+	LabelSelectorParam(o.Selector).
+	//将对象打平
+	Flatten().
+	//进行result构造
+	Do()
+```
+`FilenameParam`过程中会对请求中的路径进行解析，因为可以目录后者多个文件，因此会有多个path。
+
+```go
+for _, s := range paths {
+		switch {
+		case s == "-":
+			b.Stdin()
+		//支持通过url进行创建
+		case strings.Index(s, "http://") == 0 || strings.Index(s, "https://") == 0:
+			url, err := url.Parse(s)
+			if err != nil {
+				b.errs = append(b.errs, fmt.Errorf("the URL passed to filename %q is not valid: %v", s, err))
+				continue
+			}
+			b.URL(defaultHttpGetAttempts, url)
+		default:
+		//目录需要递归
+			if !recursive {
+				b.singleItemImplied = true
+			}
+			//解析path
+			b.Path(recursive, s)
+		}
+	}
+```
+
+`Path`里会调用`ExpandPathsToFileVisitors`将每个路径包装成`FileVisitor`，`FileVisitor`里又包含了`StreamVisitor`，这个使用了`Visitor`设计模式。最终把Visitor[]赋值给`*Builder.paths`。
+
+DO()首先进行result构建，在`visitByPaths`里可以看到，会把之前创建的FileVisitor[]包装成一个统一的Visitor，最终包装结果如下：
+
+```
+NewDecoratedVisitor --> NewFlattenListVisitor --> EagerVisitorList
+```
+
+>这个是包装器设计模式，就像java.io包那样。
+
+接下来就是根据之前的在builder里设置的参数构造VisitorFunc，这个就是visit模式里的逻辑啦。
+
+包装好Visitor链后就开始访问：
+
+```mermaid
+sequenceDiagram
+    NewDecoratedVisitor->>ContinueOnErrorVisitor: F1
+	Note right of NewDecoratedVisitor:通过包装器模式<br/>完成对资源的访问
+	ContinueOnErrorVisitor->>FlattenListVisitor: F2(F1)
+	FlattenListVisitor->>EagerVisitorList:F3(F2(F1))
+	EagerVisitorList->>FileVisitor:F4(F3(F2(F1)))
+	FileVisitor->>StreamVisitor:F5(F4(F3(F2(F1))))
+	StreamVisitor-->>FileVisitor: «return»
+	FileVisitor-->>EagerVisitorList: «return»
+	EagerVisitorList-->>FlattenListVisitor: «return»
+	FlattenListVisitor-->>ContinueOnErrorVisitor: «return»
+	ContinueOnErrorVisitor-->>NewDecoratedVisitor: «return»
+```
+<!-- 
+```mermaid
+sequenceDiagram
+NewDecoratedVisitor->ContinueOnErrorVisitor
+ContinueOnErrorVisitor->NewDecoratedVisitor
+``` -->
