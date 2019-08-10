@@ -243,9 +243,81 @@ sequenceDiagram
 	FlattenListVisitor-->>ContinueOnErrorVisitor: «return»
 	ContinueOnErrorVisitor-->>NewDecoratedVisitor: «return»
 ```
-<!-- 
-```mermaid
-sequenceDiagram
-NewDecoratedVisitor->ContinueOnErrorVisitor
-ContinueOnErrorVisitor->NewDecoratedVisitor
-``` -->
+
+最终在根访问器完成发送请求到apiServer:
+
+```go
+err = r.Visit(func(info *resource.Info, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := kubectl.CreateOrUpdateAnnotation(cmdutil.GetFlagBool(cmd, cmdutil.ApplyAnnotationsFlag), info.Object, scheme.DefaultJSONEncoder()); err != nil {
+			return cmdutil.AddSourceToErr("creating", info.Source, err)
+		}
+
+		if err := o.Recorder.Record(info.Object); err != nil {
+			klog.V(4).Infof("error recording current command: %v", err)
+		}
+
+		if !o.DryRun {
+			//创建资源
+			if err := createAndRefresh(info); err != nil {
+				return cmdutil.AddSourceToErr("creating", info.Source, err)
+			}
+		}
+
+		count++
+
+		return o.PrintObj(info.Object)
+	})
+```
+
+```go
+func createAndRefresh(info *resource.Info) error {
+	//妈蛋，这里的Create方法应该换行！！！一开始一直没找到哪里发请求！！！
+	obj, err := resource.NewHelper(info.Client, info.Mapping).Create(info.Namespace, true, info.Object, nil)
+	if err != nil {
+		return err
+	}
+	info.Refresh(obj, true)
+	return nil
+}
+```
+
+
+```go
+func (m *Helper) Create(namespace string, modify bool, obj runtime.Object, options *metav1.CreateOptions) (runtime.Object, error) {
+	if options == nil {
+		options = &metav1.CreateOptions{}
+	}
+	if modify {
+		// Attempt to version the object based on client logic.
+		version, err := metadataAccessor.ResourceVersion(obj)
+		if err != nil {
+			// We don't know how to clear the version on this object, so send it to the server as is
+			return m.createResource(m.RESTClient, m.Resource, namespace, obj, options)
+		}
+		if version != "" {
+			if err := metadataAccessor.SetResourceVersion(obj, ""); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return m.createResource(m.RESTClient, m.Resource, namespace, obj, options)
+}
+```
+
+
+```go
+//往服务器发送post请求
+func (m *Helper) createResource(c RESTClient, resource, namespace string, obj runtime.Object, options *metav1.CreateOptions) (runtime.Object, error) {
+	return c.Post().
+		NamespaceIfScoped(namespace, m.NamespaceScoped).
+		Resource(resource).
+		VersionedParams(options, metav1.ParameterCodec).
+		Body(obj).
+		Do().
+		Get()
+}
+```

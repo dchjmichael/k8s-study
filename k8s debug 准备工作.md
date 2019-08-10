@@ -4,7 +4,7 @@
 
 我这边的系统是：Ubuntu 64-bit 18.04。
 
-下面有些工具我用了`axel`进行下载，这个工具可以多线程下载，速度很快。
+下面有些工具我用了`axel`进行下载，这个工具可以多线程下载，速度很快，`-n 10`表示用10个线程下载。
 
 **Docker**
 
@@ -88,6 +88,10 @@ dlv debug cmd/kubectl/kubectl.go -- run my-nginx --image=nginx --replicas=2 --po
 |step|s|step in到里面|
 |print|p|打印变量的值。我试了下表达式也可以打印|
 |list|ls l|打印当前所在位置的源代码|
+|breakpoints|bp|列出所有断点|
+|clear|N/A|删除断点，通过名称后者id|
+|clearall|N/A|删除所有断点|
+|call|N/A|函数调用。有点类似于idea的evaluate expression。不同于print，print用于打印变量。|
 
 还有很多其他命令，具体可以看[文档](https://github.com/go-delve/delve/blob/master/Documentation/cli/README.md)
 
