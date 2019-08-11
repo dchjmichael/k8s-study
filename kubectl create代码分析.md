@@ -231,17 +231,17 @@ NewDecoratedVisitor --> NewFlattenListVisitor --> EagerVisitorList
 
 ```mermaid
 sequenceDiagram
-    NewDecoratedVisitor->>ContinueOnErrorVisitor: F1
+    NewDecoratedVisitor->>+ContinueOnErrorVisitor: Visit
 	Note right of NewDecoratedVisitor:通过包装器模式<br/>完成对资源的访问
-	ContinueOnErrorVisitor->>FlattenListVisitor: F2(F1)
-	FlattenListVisitor->>EagerVisitorList:F3(F2(F1))
-	EagerVisitorList->>FileVisitor:F4(F3(F2(F1)))
-	FileVisitor->>StreamVisitor:F5(F4(F3(F2(F1))))
-	StreamVisitor-->>FileVisitor: «return»
-	FileVisitor-->>EagerVisitorList: «return»
-	EagerVisitorList-->>FlattenListVisitor: «return»
-	FlattenListVisitor-->>ContinueOnErrorVisitor: «return»
-	ContinueOnErrorVisitor-->>NewDecoratedVisitor: «return»
+	ContinueOnErrorVisitor->>+FlattenListVisitor: Visit
+	FlattenListVisitor->>+EagerVisitorList:Visit
+	EagerVisitorList->>+FileVisitor:Visit
+	FileVisitor->>+StreamVisitor:Visit
+	StreamVisitor->>-FileVisitor: «callback fn»
+	FileVisitor->>-EagerVisitorList: «callback fn»
+	EagerVisitorList->>-FlattenListVisitor: «callback fn»
+	FlattenListVisitor->>-ContinueOnErrorVisitor: «callback fn»
+	ContinueOnErrorVisitor->>-NewDecoratedVisitor: «callback fn»
 ```
 
 最终在根访问器完成发送请求到apiServer:
